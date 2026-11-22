@@ -30,6 +30,8 @@ jobs:
 
     - name: Run pre-commit checks
       shell: bash -el {0}
+      env:
+        SKIP: no-commit-to-branch
       run: |
         conda activate emg2qwerty
         pre-commit run --all-files

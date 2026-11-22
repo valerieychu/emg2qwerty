@@ -5,6 +5,8 @@ on: [push]
 jobs:
   build-linux:
     runs-on: ubuntu-latest
+    env:
+      CMAKE_POLICY_VERSION_MINIMUM: "3.5"
     strategy:
       max-parallel: 5
 

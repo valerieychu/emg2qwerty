@@ -22,6 +22,7 @@ from emg2qwerty.charset import charset
 from emg2qwerty.data import LabelData, WindowedEMGDataset
 from emg2qwerty.metrics import CharacterErrorRates
 from emg2qwerty.modules import (
+    MambaEncoder,
     MultiBandRotationInvariantMLP,
     SpectrogramNorm,
     TDSConvEncoder,
@@ -402,4 +403,83 @@ class MyTestofTDSConvCTCModule(pl.LightningModule):
             self.parameters(),
             optimizer_config=self.hparams.optimizer,
             lr_scheduler_config=self.hparams.lr_scheduler,
+        )
+
+
+class MambaCTCModule(TDSConvCTCModule):
+    """
+    Same SpectrogramNorm, MultiBandRotationInvariantMLP, Flatten, Linear, LogSoftmax as TDSConvCTCModule.
+    Same CTC loss, decoder and metrics as TDSConvCTCModule.
+    Use a Mamba-2 encoder (bidirectional or forward-only) in place of the TDS conv blocks.
+    Reuse `_step`, optimizer and epoch hooks from TDSConvCTCModule.
+    """
+
+    NUM_BANDS: ClassVar[int] = 2
+    ELECTRODE_CHANNELS: ClassVar[int] = 16
+
+    def __init__(
+        self,
+        in_features: int,
+        mlp_features: Sequence[int],
+        # block_channels: Sequence[int],
+        # kernel_width: int,
+        optimizer: DictConfig,
+        lr_scheduler: DictConfig,
+        decoder: DictConfig,
+        num_layers: int = 4,
+        d_state: int = 128, # default
+        headdim: int = 64, # default
+        expand: int = 2, # default
+        crop_left: int = 112, # 1800 padding / 16 hop length = 112.5
+        crop_right: int = 12, # 200 padding / 16 hop length = 12.5
+        bidirectional: bool = True, # change this depending
+    ) -> None:
+        # super().__init__() # change this, skip TDS recipe, use LightningModule's (Mamba doesn't have block_channels or kernel_width)
+        super(TDSConvCTCModule, self).__init__()
+        self.save_hyperparameters()
+
+        num_features = self.NUM_BANDS * mlp_features[-1]
+
+        # Model
+        # inputs: (T, N, bands=2, electrode_channels=16, freq)
+        self.model = nn.Sequential(
+            # (T, N, bands=2, C=16, freq)
+            SpectrogramNorm(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS),
+            # (T, N, bands=2, mlp_features[-1])
+            MultiBandRotationInvariantMLP(
+                in_features=in_features,
+                mlp_features=mlp_features,
+                num_bands=self.NUM_BANDS,
+            ),
+            # (T, N, num_features)
+            nn.Flatten(start_dim=2),
+            # (T - crop_left - crop_right, N, num_features)
+            MambaEncoder(
+                num_features=num_features,
+                num_layers=num_layers,
+                d_state=d_state,
+                headdim=headdim,
+                expand=expand,
+                crop_left=crop_left,
+                crop_right=crop_right,
+                bidirectional=bidirectional,
+            ),
+            # (T - crop_left - crop_right, N, num_classes)
+            nn.Linear(num_features, charset().num_classes),
+            nn.LogSoftmax(dim=-1),
+        )
+
+        # Criterion
+        self.ctc_loss = nn.CTCLoss(blank=charset().null_class)
+
+        # Decoder
+        self.decoder = instantiate(decoder)
+
+        # Metrics
+        metrics = MetricCollection([CharacterErrorRates()])
+        self.metrics = nn.ModuleDict(
+            {
+                f"{phase}_metrics": metrics.clone(prefix=f"{phase}/")
+                for phase in ["train", "val", "test"]
+            }
         )

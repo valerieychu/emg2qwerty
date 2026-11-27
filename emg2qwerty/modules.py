@@ -278,3 +278,119 @@ class TDSConvEncoder(nn.Module):
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         return self.tds_conv_blocks(inputs)  # (T, N, num_features)
+
+
+class CropTime(nn.Module):
+    '''
+    Crops left frames from the start and right frames from the end of
+    the time dimension (dim 0) of a (T, N, ...) tensor
+    
+    TDSConvEncoder made the sequence shorter since its convolutions 
+    didn't have padding, so each layer loses 32 - 1 = 31 frames, 
+    and four layers lose 124. Then its TDSConvCTCModule._step subtracts 
+    that difference from the CTC input lengths.
+
+    Mamba preserves lengths, so it also has to drop the same context so 
+    that CTC input lengths and targets line up.
+
+    '''
+    def __init__(self, left: int, right: int) -> None:
+        super().__init__()
+        self.left = left
+        self.right = right
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        end = inputs.shape[0] - self.right
+        return inputs[self.left : end]
+
+    
+class Mamba2Block(nn.Module):
+    """
+    Pre-norm residual Mamba-2 block. Input/output: (N, T, d_model).
+
+    bidirectional=True — bidirectional (forward and a time-reversed) Mamba-2, concatenated and projected back to d_model.
+    custom_models.yaml sets padding: [1800, 200], so that adds 100 ms of right-hand context and a 12-frame look-ahead. 
+    I'm not sure, but I think this look-ahead could be helpful if, for example, we prepare to type the next key before the current one finishes, 
+    so what follows could help us predict the current typing.
+
+    bidirectional=False — forward only Mamba-2.
+
+    Forward only Mamba-2 (setting bidirectional to False) will determine whether Mamba-2 performs better than the baseline CNN with a similar look-ahead. 
+
+    Bidirectional Mamba-2 (setting bidirectional to True) vs. forward only Mamba-2 will determine whether the look-ahead helps. 
+
+    """
+
+    def __init__(
+        self,
+        d_model: int,
+        d_state: int = 128,
+        headdim: int = 64,
+        expand: int = 2,
+        bidirectional: bool = True,
+        # Mamba architectures use no dropout
+    ) -> None:
+        super().__init__()
+        try:
+            from mamba_ssm import Mamba2
+        except ImportError as e:
+            raise ImportError(
+                "mamba_ssm is required (pip install mamba-ssm causal-conv1d; needs a CUDA GPU)."
+            ) from e
+
+        self.bidirectional = bidirectional
+        self.norm = nn.LayerNorm(d_model)
+        self.fwd = Mamba2(d_model=d_model, d_state=d_state, headdim=headdim, expand=expand)
+        if bidirectional:
+            self.bwd = Mamba2(d_model=d_model, d_state=d_state, headdim=headdim, expand=expand)
+            self.proj = nn.Linear(2 * d_model, d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = self.norm(x)
+        y = self.fwd(h)
+        if self.bidirectional:
+            b = self.bwd(h.flip(1)).flip(1)  # reverse time, run, reverse back
+            y = self.proj(torch.cat([y, b], dim=-1))
+        return x + y
+
+
+class MambaEncoder(nn.Module):
+    """
+    Stack of Mamba-2 blocks, then LayerNorm, then a time crop. 
+    
+    Mamba paper Section 3.4 and Figure 3.
+    Mamba-2 paper Section 7 and Figure 6. 
+
+    (T, N, num_features) -> (T - crop_left - crop_right, N, num_features).
+    Output length matches TDSConvEncoder's (crop_left + crop_right = 124).
+    
+    """
+
+    def __init__(
+        self,
+        num_features: int,
+        num_layers: int = 4,
+        d_state: int = 128,
+        headdim: int = 64,
+        expand: int = 2,
+        crop_left: int = 112,
+        crop_right: int = 12,
+        bidirectional: bool = True,
+        # Mamba architectures use no dropout
+    ) -> None:
+        super().__init__()
+        self.layers = nn.ModuleList(
+            [
+                Mamba2Block(num_features, d_state, headdim, expand, bidirectional)
+                for _ in range(num_layers)
+            ]
+        )
+        self.out_norm = nn.LayerNorm(num_features)
+        self.crop = CropTime(crop_left, crop_right)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        x = inputs.transpose(0, 1)  # (T, N, C) -> (N, T, C) since Mamba is batch-first
+        for layer in self.layers:
+            x = layer(x)
+        x = self.out_norm(x).transpose(0, 1)  # back to (T, N, C)
+        return self.crop(x)

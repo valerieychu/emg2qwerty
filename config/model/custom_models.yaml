@@ -1,12 +1,23 @@
 # @package _global_
 
-# module changes depending on the module. datamodule stays the same.
-module: # a test setup; ignore this
-  _target_: emg2qwerty.lightning.MyTestofTDSConvCTCModule
-  in_features: 528  # freq * channels = (n_fft // 2 + 1) * 16
+# module: # a test setup; ignore this
+#   _target_: emg2qwerty.lightning.MyTestofTDSConvCTCModule
+#   in_features: 528  # freq * channels = (n_fft // 2 + 1) * 16
+#   mlp_features: [384]
+#   block_channels: [24, 24, 24, 24]
+#   kernel_width: 32  # Total temporal receptive field of 125 samples given 4 layers
+
+module:
+  _target_: emg2qwerty.lightning.MambaCTCModule
+  in_features: 528
   mlp_features: [384]
-  block_channels: [24, 24, 24, 24]
-  kernel_width: 32  # Total temporal receptive field of 125 samples given 4 layers
+  num_layers: 4
+  d_state: 128
+  headdim: 64
+  expand: 2
+  crop_left: 112 # bidirectional: keep the labelled region
+  crop_right: 12 # forward-only runs override these to 124 and 0
+  bidirectional: true
 
 datamodule:
   _target_: emg2qwerty.lightning.WindowedEMGDataModule

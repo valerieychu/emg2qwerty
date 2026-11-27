@@ -1,8 +1,8 @@
 # @package _global_
 
-# module changes depending on the module. datamodule stays the same. 
+# module changes depending on the module. datamodule stays the same.
 module: # a test setup; ignore this
-  _target_: emg2qwerty.lightning.MyTestofTDSConvCTCModule 
+  _target_: emg2qwerty.lightning.MyTestofTDSConvCTCModule
   in_features: 528  # freq * channels = (n_fft // 2 + 1) * 16
   mlp_features: [384]
   block_channels: [24, 24, 24, 24]

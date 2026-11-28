@@ -1,4 +1,5 @@
-# config/model/mamba_bi.yaml
+# @package _global_
+
 module:
   _target_: emg2qwerty.lightning.MambaCTCModule
   in_features: 528

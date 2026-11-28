@@ -281,43 +281,50 @@ class TDSConvEncoder(nn.Module):
 
 
 class CropTime(nn.Module):
-    '''
+    """
     Crops left frames from the start and right frames from the end of
     the time dimension (dim 0) of a (T, N, ...) tensor
-    
-    TDSConvEncoder made the sequence shorter since its convolutions 
-    didn't have padding, so each layer loses 32 - 1 = 31 frames, 
-    and four layers lose 124. Then its TDSConvCTCModule._step subtracts 
+
+    TDSConvEncoder made the sequence shorter since its convolutions
+    didn't have padding, so each layer loses 32 - 1 = 31 frames,
+    and four layers lose 124. Then its TDSConvCTCModule._step subtracts
     that difference from the CTC input lengths.
 
-    Mamba preserves lengths, so it also has to drop the same context so 
+    Mamba preserves lengths, so it also has to drop the same context so
     that CTC input lengths and targets line up.
 
-    '''
+    """
+
     def __init__(self, left: int, right: int) -> None:
         super().__init__()
         self.left = left
         self.right = right
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        start = self.left
         end = inputs.shape[0] - self.right
-        return inputs[self.left : end]
+        return inputs[start:end]
 
-    
+
 class Mamba2Block(nn.Module):
     """
     Pre-norm residual Mamba-2 block. Input/output: (N, T, d_model).
 
-    bidirectional=True — bidirectional (forward and a time-reversed) Mamba-2, concatenated and projected back to d_model.
-    custom_models.yaml sets padding: [1800, 200], so that adds 100 ms of right-hand context and a 12-frame look-ahead. 
-    I'm not sure, but I think this look-ahead could be helpful if, for example, we prepare to type the next key before the current one finishes, 
-    so what follows could help us predict the current typing.
+    bidirectional=True — bidirectional (forward and a time-reversed) Mamba-2,
+        concatenated and projected back to d_model.
+    custom_models.yaml sets padding: [1800, 200], so that adds 100 ms of
+        right-hand context and a 12-frame look-ahead.
+    I'm not sure, but I think this look-ahead could be helpful if, for example,
+        we prepare to type the next key before the current one finishes,
+        so what follows could help us predict the current typing.
 
     bidirectional=False — forward only Mamba-2.
 
-    Forward only Mamba-2 (setting bidirectional to False) will determine whether Mamba-2 performs better than the baseline CNN with a similar look-ahead. 
+    Forward only Mamba-2 (setting bidirectional to False) will determine whether
+        Mamba-2 performs better than the baseline CNN with a similar look-ahead.
 
-    Bidirectional Mamba-2 (setting bidirectional to True) vs. forward only Mamba-2 will determine whether the look-ahead helps. 
+    Bidirectional Mamba-2 (setting bidirectional to True) vs. forward only Mamba-2
+        will determine whether the look-ahead helps.
 
     """
 
@@ -335,14 +342,19 @@ class Mamba2Block(nn.Module):
             from mamba_ssm import Mamba2
         except ImportError as e:
             raise ImportError(
-                "mamba_ssm is required (pip install mamba-ssm causal-conv1d; needs a CUDA GPU)."
+                "mamba_ssm is required "
+                "(pip install mamba-ssm causal-conv1d; needs a CUDA GPU)."
             ) from e
 
         self.bidirectional = bidirectional
         self.norm = nn.LayerNorm(d_model)
-        self.fwd = Mamba2(d_model=d_model, d_state=d_state, headdim=headdim, expand=expand)
+        self.fwd = Mamba2(
+            d_model=d_model, d_state=d_state, headdim=headdim, expand=expand
+        )
         if bidirectional:
-            self.bwd = Mamba2(d_model=d_model, d_state=d_state, headdim=headdim, expand=expand)
+            self.bwd = Mamba2(
+                d_model=d_model, d_state=d_state, headdim=headdim, expand=expand
+            )
             self.proj = nn.Linear(2 * d_model, d_model)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -356,14 +368,14 @@ class Mamba2Block(nn.Module):
 
 class MambaEncoder(nn.Module):
     """
-    Stack of Mamba-2 blocks, then LayerNorm, then a time crop. 
-    
+    Stack of Mamba-2 blocks, then LayerNorm, then a time crop.
+
     Mamba paper Section 3.4 and Figure 3.
-    Mamba-2 paper Section 7 and Figure 6. 
+    Mamba-2 paper Section 7 and Figure 6.
 
     (T, N, num_features) -> (T - crop_left - crop_right, N, num_features).
     Output length matches TDSConvEncoder's (crop_left + crop_right = 124).
-    
+
     """
 
     def __init__(

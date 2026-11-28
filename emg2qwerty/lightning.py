@@ -408,9 +408,11 @@ class MyTestofTDSConvCTCModule(pl.LightningModule):
 
 class MambaCTCModule(TDSConvCTCModule):
     """
-    Same SpectrogramNorm, MultiBandRotationInvariantMLP, Flatten, Linear, LogSoftmax as TDSConvCTCModule.
+    Same SpectrogramNorm, MultiBandRotationInvariantMLP,
+        Flatten, Linear, LogSoftmax as TDSConvCTCModule.
     Same CTC loss, decoder and metrics as TDSConvCTCModule.
-    Use a Mamba-2 encoder (bidirectional or forward-only) in place of the TDS conv blocks.
+    Use a Mamba-2 encoder (bidirectional or forward-only) in
+        place of the TDS conv blocks.
     Reuse `_step`, optimizer and epoch hooks from TDSConvCTCModule.
     """
 
@@ -427,14 +429,15 @@ class MambaCTCModule(TDSConvCTCModule):
         lr_scheduler: DictConfig,
         decoder: DictConfig,
         num_layers: int = 4,
-        d_state: int = 128, # default
-        headdim: int = 64, # default
-        expand: int = 2, # default
-        crop_left: int = 112, # 1800 padding / 16 hop length = 112.5
-        crop_right: int = 12, # 200 padding / 16 hop length = 12.5
-        bidirectional: bool = True, # change this depending
+        d_state: int = 128,  # default
+        headdim: int = 64,  # default
+        expand: int = 2,  # default
+        crop_left: int = 112,  # 1800 padding / 16 hop length = 112.5
+        crop_right: int = 12,  # 200 padding / 16 hop length = 12.5
+        bidirectional: bool = True,
     ) -> None:
-        # super().__init__() # change this, skip TDS recipe, use LightningModule's (Mamba doesn't have block_channels or kernel_width)
+        # super().__init__() # change this, skip TDS recipe, use
+        #   LightningModule's (Mamba doesn't have block_channels or kernel_width)
         super(TDSConvCTCModule, self).__init__()
         self.save_hyperparameters()
 
